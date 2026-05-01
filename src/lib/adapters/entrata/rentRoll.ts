@@ -92,16 +92,15 @@ function bedsForUnitType(code: string): { bedrooms: number; bathrooms: number } 
 }
 
 // Entrata residential unit-type codes follow predictable patterns: studios
-// (EFF/ERR/STUDIO) or floor-plan letters A/B/C with a digit. Anything else —
-// retail/office/storage spaces that occasionally land on the same Rent Roll —
-// is treated as commercial and dropped so it doesn't pollute occupancy and
-// rent metrics.
+// (EFF/ERR/STUDIO) or floor-plan letters A/B with a digit. C and beyond are
+// reserved for commercial/retail/storage at Lower Burnside, and any code that
+// doesn't match these patterns (parking, storage, billboards, ground-floor
+// retail) is dropped so it doesn't pollute occupancy and rent metrics.
 function isResidentialUnitType(code: string): boolean {
   const u = code.toUpperCase().trim();
   if (!u) return false;
-  if (/EFF|ERR|STUDIO/.test(u)) return true;
-  if (/^[A-Z]+[ABC]\d/.test(u)) return true;
-  if (/[ABC]\d+$/.test(u)) return true;
+  if (/(EFF|ERR|STUDIO)\d*$/.test(u)) return true;
+  if (/[AB]\d+$/.test(u)) return true;
   return false;
 }
 
@@ -232,6 +231,16 @@ export function parseRentRoll(input: Bytes): RentRollResult {
     const unit = buildUnit(g, propertySlug);
     if (!unit) continue;
     if (!isResidentialUnitType(unit.unitType)) continue; // skip commercial spaces
+    // Defensive: an occupied/notice unit with non-positive scheduled rent is
+    // either a footer artifact that slipped past the stop-row check or a
+    // commercial unit billed elsewhere. Either way, dropping it keeps the
+    // rent-collection denominator honest.
+    if (
+      (unit.status === "occupied" || unit.status === "notice") &&
+      unit.scheduledRent <= 0
+    ) {
+      continue;
+    }
     units.push(unit);
 
     // Capture positive balance for AR approximation. Skip vacant units (no
