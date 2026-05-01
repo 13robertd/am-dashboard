@@ -3,9 +3,10 @@
 import { useMemo, useState } from "react";
 import { Building } from "lucide-react";
 import { listProperties } from "@/lib/queries";
+import { REPORT_TOTAL, reportsUploaded } from "@/lib/reports";
 import { DashboardHeader } from "@/components/dashboard/DashboardHeader";
 import { PropertySwitcher } from "@/components/dashboard/PropertySwitcher";
-import { UploadStub } from "@/components/dashboard/UploadStub";
+import { ManageReportsButton } from "@/components/dashboard/ManageReportsButton";
 import { HeroRow } from "@/components/dashboard/HeroRow";
 import { OperationsRow } from "@/components/dashboard/OperationsRow";
 import { FinancialStrip } from "@/components/dashboard/FinancialStrip";
@@ -29,17 +30,22 @@ export default function HomePage() {
             </div>
             <span className="text-sm font-semibold text-zinc-900">Owner Dashboard</span>
           </div>
-          <PropertySwitcher
-            properties={properties}
-            selectedId={property.id}
-            onSelect={setSelectedId}
-          />
+          <div className="flex items-center gap-3">
+            <ManageReportsButton
+              uploaded={reportsUploaded(property)}
+              total={REPORT_TOTAL}
+            />
+            <PropertySwitcher
+              properties={properties}
+              selectedId={property.id}
+              onSelect={setSelectedId}
+            />
+          </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-8 space-y-6">
         <DashboardHeader property={property} />
-        <UploadStub />
         <HeroRow property={property} />
         <OperationsRow property={property} />
         <FinancialStrip property={property} />

@@ -1,10 +1,16 @@
 import { Wrench } from "lucide-react";
 import type { Property } from "@/types/portfolio";
 import { KpiCard } from "@/components/dashboard/KpiCard";
+import { Delta } from "@/components/dashboard/Delta";
 import { PlaceholderCard } from "@/components/dashboard/PlaceholderCard";
-import { formatCurrency, formatLongDate, formatShortDate } from "@/lib/format";
+import {
+  formatCurrencyAggregate,
+  formatLongDate,
+  formatShortDate,
+} from "@/lib/format";
 import {
   leaseExpirations,
+  maintenanceDelta,
   maintenanceSpendThisMonth,
 } from "@/lib/metrics";
 
@@ -26,12 +32,12 @@ function MultifamilyOps({ property }: { property: Property }) {
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
       <PlaceholderCard
-        label="Open Maintenance"
-        message="Connect Entrata Work Order export to enable"
+        label="Open Work Orders"
+        message="Data needed — Upload Work Order Report to show open work orders."
         icon={Wrench}
       />
       <KpiCard
-        label="Lease Expirations"
+        label="Upcoming Lease Expirations"
         value={`${expirations.length} in 90d`}
         sub={
           top.length === 0 ? (
@@ -55,8 +61,8 @@ function MultifamilyOps({ property }: { property: Property }) {
       />
       <KpiCard
         label="Maintenance Spend"
-        value={formatCurrency(maintSpend)}
-        sub="this month"
+        value={formatCurrencyAggregate(maintSpend)}
+        delta={<Delta delta={maintenanceDelta(property)} polarity="neutral" />}
       />
     </div>
   );
@@ -72,7 +78,7 @@ function SfrOps({ property }: { property: Property }) {
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <PlaceholderCard
         label="Open Issues"
-        message="Connect Entrata Work Order export to enable"
+        message="Data needed — Upload Work Order Report to show open issues."
         icon={Wrench}
       />
       <KpiCard label="Lease" value={leaseLine} sub={lease?.tenantName ?? ""} />

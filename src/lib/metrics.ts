@@ -1,5 +1,5 @@
 import { addDays, isAfter, isBefore, parseISO } from "date-fns";
-import type { Property, UnitStatus } from "@/types/portfolio";
+import type { MonthlyFinancial, Property, UnitStatus } from "@/types/portfolio";
 
 export interface OccupancyResult {
   occupied: number;
@@ -148,4 +148,49 @@ export function netCashFlowThisMonth(p: Property): number {
   const row = rowForReportingPeriod(p);
   if (!row) return 0;
   return row.noi - row.nonOperatingExpenses;
+}
+
+export interface MomDelta {
+  current: number;
+  prior: number;
+  priorMonth: string;
+}
+
+export function momDelta(
+  p: Property,
+  extract: (m: MonthlyFinancial) => number
+): MomDelta | null {
+  const sorted = [...p.monthlyFinancials].sort((a, b) =>
+    a.month.localeCompare(b.month)
+  );
+  const idx = sorted.findIndex((m) => m.month === p.reportingPeriod);
+  if (idx <= 0) return null;
+  const cur = sorted[idx];
+  const prev = sorted[idx - 1];
+  if (!cur || !prev) return null;
+  return {
+    current: extract(cur),
+    prior: extract(prev),
+    priorMonth: prev.month,
+  };
+}
+
+export function incomeDelta(p: Property): MomDelta | null {
+  return momDelta(p, (m) => m.income);
+}
+
+export function opexDelta(p: Property): MomDelta | null {
+  return momDelta(p, (m) => m.operatingExpenses);
+}
+
+export function noiDelta(p: Property): MomDelta | null {
+  return momDelta(p, (m) => m.noi);
+}
+
+export function cashFlowDelta(p: Property): MomDelta | null {
+  return momDelta(p, (m) => m.noi - m.nonOperatingExpenses);
+}
+
+export function maintenanceDelta(p: Property): MomDelta | null {
+  return momDelta(p, (m) => m.maintenanceSpend);
 }

@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { burnside, maple } from "@/data/sample";
 import {
+  cashFlowDelta,
   delinquencies,
+  incomeDelta,
   leaseExpirations,
+  maintenanceDelta,
+  momDelta,
   netCashFlowThisMonth,
+  noiDelta,
   noiThisMonth,
   occupancyRate,
   openWorkOrders,
+  opexDelta,
   rentExpectedThisMonth,
   statusBreakdown,
 } from "@/lib/metrics";
@@ -62,6 +68,49 @@ describe("metrics — Lower Burnside Lofts (multifamily)", () => {
 
   it("openWorkOrders returns null when sample has none (placeholder UI cue)", () => {
     expect(openWorkOrders(burnside)).toBeNull();
+  });
+});
+
+describe("MoM deltas — Burnside (April vs March 2026)", () => {
+  it("noiDelta: 49758 vs 48598.57 → ~+2.4%", () => {
+    const d = noiDelta(burnside);
+    expect(d).not.toBeNull();
+    expect(d!.current).toBeCloseTo(49758.0, 2);
+    expect(d!.prior).toBeCloseTo(48598.57, 2);
+    expect(d!.priorMonth).toBe("2026-03-01");
+    const pct = ((d!.current - d!.prior) / Math.abs(d!.prior)) * 100;
+    expect(pct).toBeCloseTo(2.385, 1);
+  });
+
+  it("incomeDelta: 90429.98 vs 90058.92 → flat (~+0.4%, under 0.5%)", () => {
+    const d = incomeDelta(burnside);
+    const pct = ((d!.current - d!.prior) / Math.abs(d!.prior)) * 100;
+    expect(Math.abs(pct)).toBeLessThan(0.5);
+  });
+
+  it("opexDelta: 40671.98 vs 41460.35 → ~-1.9%", () => {
+    const d = opexDelta(burnside);
+    const pct = ((d!.current - d!.prior) / Math.abs(d!.prior)) * 100;
+    expect(pct).toBeCloseTo(-1.901, 1);
+  });
+
+  it("cashFlowDelta: +16411.26 vs -3054.01 → strongly positive (>100%)", () => {
+    const d = cashFlowDelta(burnside);
+    expect(d!.current).toBeCloseTo(16411.26, 2);
+    expect(d!.prior).toBeCloseTo(-3054.01, 2);
+    const pct = ((d!.current - d!.prior) / Math.abs(d!.prior)) * 100;
+    expect(pct).toBeGreaterThan(100);
+  });
+
+  it("maintenanceDelta: 6350.14 vs 6373.95 → flat (under 0.5%)", () => {
+    const d = maintenanceDelta(burnside);
+    const pct = ((d!.current - d!.prior) / Math.abs(d!.prior)) * 100;
+    expect(Math.abs(pct)).toBeLessThan(0.5);
+  });
+
+  it("momDelta returns null for January (no prior month)", () => {
+    const janOnly = { ...burnside, reportingPeriod: "2026-01-01" };
+    expect(momDelta(janOnly, (m) => m.income)).toBeNull();
   });
 });
 

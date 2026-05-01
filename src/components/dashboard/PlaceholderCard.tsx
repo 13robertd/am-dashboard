@@ -13,7 +13,7 @@ export function PlaceholderCard({
   icon: Icon,
 }: PlaceholderCardProps) {
   return (
-    <Card className="flex flex-col border-dashed">
+    <Card className="flex flex-col bg-zinc-50/80">
       <CardHeader>
         <CardTitle className="text-zinc-400">{label}</CardTitle>
       </CardHeader>

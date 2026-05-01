@@ -4,11 +4,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 interface KpiCardProps {
   label: string;
   value: ReactNode;
+  delta?: ReactNode;
   sub?: ReactNode;
   footer?: ReactNode;
 }
 
-export function KpiCard({ label, value, sub, footer }: KpiCardProps) {
+export function KpiCard({ label, value, delta, sub, footer }: KpiCardProps) {
   return (
     <Card className="flex flex-col">
       <CardHeader>
@@ -18,6 +19,7 @@ export function KpiCard({ label, value, sub, footer }: KpiCardProps) {
         <div className="text-3xl font-semibold tracking-tight text-zinc-900 tabular-nums">
           {value}
         </div>
+        {delta ? <div className="mt-1 text-xs">{delta}</div> : null}
         {sub ? <div className="mt-1 text-sm text-zinc-500">{sub}</div> : null}
       </CardContent>
       {footer ? (

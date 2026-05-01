@@ -1,7 +1,11 @@
 import type { Property } from "@/types/portfolio";
-import { formatMonthYear } from "@/lib/format";
+import { formatLongDate, formatMonthYearLong } from "@/lib/format";
+import { REPORT_TOTAL, reportsUploaded } from "@/lib/reports";
 
 export function DashboardHeader({ property }: { property: Property }) {
+  const uploaded = reportsUploaded(property);
+  const lastUpdated = formatLongDate(new Date().toISOString().slice(0, 10));
+
   return (
     <div className="border-b border-zinc-200 pb-4">
       <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
@@ -12,7 +16,12 @@ export function DashboardHeader({ property }: { property: Property }) {
         <span className="mx-2 text-zinc-300">·</span>
         {property.address.city}, {property.address.state}
         <span className="mx-2 text-zinc-300">·</span>
-        Reporting period: {formatMonthYear(property.reportingPeriod)}
+        As of {formatMonthYearLong(property.reportingPeriod)}
+      </p>
+      <p className="mt-1 text-xs text-zinc-500">
+        Reports uploaded: {uploaded} of {REPORT_TOTAL}
+        <span className="mx-2 text-zinc-300">·</span>
+        Last updated {lastUpdated}
       </p>
     </div>
   );

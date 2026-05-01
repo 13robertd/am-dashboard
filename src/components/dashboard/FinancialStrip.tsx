@@ -1,15 +1,29 @@
 import type { ReactNode } from "react";
 import { ArrowRight } from "lucide-react";
 import type { Property } from "@/types/portfolio";
-import { formatCurrency } from "@/lib/format";
+import { Delta, type DeltaPolarity } from "@/components/dashboard/Delta";
+import { formatCurrencyAggregate } from "@/lib/format";
 import {
+  cashFlowDelta,
+  incomeDelta,
   incomeThisMonth,
+  type MomDelta,
   netCashFlowThisMonth,
+  noiDelta,
   noiThisMonth,
+  opexDelta,
   operatingExpensesThisMonth,
 } from "@/lib/metrics";
 
 const isMultifamily = (p: Property) => p.units.length >= 5;
+
+interface StepDef {
+  label: string;
+  value: number;
+  tone: "neutral" | "subtract" | "positive" | "negative";
+  delta: MomDelta | null;
+  polarity: DeltaPolarity;
+}
 
 export function FinancialStrip({ property }: { property: Property }) {
   const income = incomeThisMonth(property);
@@ -17,24 +31,58 @@ export function FinancialStrip({ property }: { property: Property }) {
   const noi = noiThisMonth(property);
   const cashFlow = netCashFlowThisMonth(property);
 
-  const steps = isMultifamily(property)
+  const steps: StepDef[] = isMultifamily(property)
     ? [
-        { label: "Income", value: income, tone: "neutral" as const },
-        { label: "OpEx", value: -opex, tone: "subtract" as const },
-        { label: "NOI", value: noi, tone: "neutral" as const },
+        {
+          label: "Income",
+          value: income,
+          tone: "neutral",
+          delta: incomeDelta(property),
+          polarity: "normal",
+        },
+        {
+          label: "OpEx",
+          value: -opex,
+          tone: "subtract",
+          delta: opexDelta(property),
+          polarity: "inverted",
+        },
+        {
+          label: "NOI",
+          value: noi,
+          tone: "neutral",
+          delta: noiDelta(property),
+          polarity: "normal",
+        },
         {
           label: "Cash Flow",
           value: cashFlow,
-          tone: cashFlow >= 0 ? ("positive" as const) : ("negative" as const),
+          tone: cashFlow >= 0 ? "positive" : "negative",
+          delta: cashFlowDelta(property),
+          polarity: "normal",
         },
       ]
     : [
-        { label: "Income", value: income, tone: "neutral" as const },
-        { label: "Expenses", value: -opex, tone: "subtract" as const },
+        {
+          label: "Income",
+          value: income,
+          tone: "neutral",
+          delta: incomeDelta(property),
+          polarity: "normal",
+        },
+        {
+          label: "Expenses",
+          value: -opex,
+          tone: "subtract",
+          delta: opexDelta(property),
+          polarity: "inverted",
+        },
         {
           label: "Cash Flow",
           value: cashFlow,
-          tone: cashFlow >= 0 ? ("positive" as const) : ("negative" as const),
+          tone: cashFlow >= 0 ? "positive" : "negative",
+          delta: cashFlowDelta(property),
+          polarity: "normal",
         },
       ];
 
@@ -50,6 +98,8 @@ export function FinancialStrip({ property }: { property: Property }) {
             label={step.label}
             value={step.value}
             tone={step.tone}
+            delta={step.delta}
+            polarity={step.polarity}
             connector={i < steps.length - 1}
           />
         ))}
@@ -62,11 +112,15 @@ function Step({
   label,
   value,
   tone,
+  delta,
+  polarity,
   connector,
 }: {
   label: string;
   value: number;
   tone: "neutral" | "subtract" | "positive" | "negative";
+  delta: MomDelta | null;
+  polarity: DeltaPolarity;
   connector: boolean;
 }) {
   let color = "text-zinc-900";
@@ -74,7 +128,10 @@ function Step({
   if (tone === "positive") color = "text-emerald-700";
   if (tone === "negative") color = "text-red-700";
 
-  const display = tone === "subtract" ? `− ${formatCurrency(Math.abs(value))}` : formatCurrency(value);
+  const display =
+    tone === "subtract"
+      ? `− ${formatCurrencyAggregate(Math.abs(value))}`
+      : formatCurrencyAggregate(value);
 
   let connectorEl: ReactNode = null;
   if (connector) {
@@ -94,6 +151,11 @@ function Step({
         <div className={`mt-1 text-xl font-semibold tabular-nums ${color}`}>
           {display}
         </div>
+        {delta ? (
+          <div className="mt-1 text-[11px]">
+            <Delta delta={delta} polarity={polarity} />
+          </div>
+        ) : null}
       </div>
       {connectorEl}
     </>

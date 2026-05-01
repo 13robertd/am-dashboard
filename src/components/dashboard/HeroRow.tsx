@@ -1,10 +1,18 @@
 import type { Property } from "@/types/portfolio";
 import { Badge } from "@/components/ui/badge";
 import { KpiCard } from "@/components/dashboard/KpiCard";
-import { formatCurrency, formatCurrencyExact, formatPercent } from "@/lib/format";
+import { Delta } from "@/components/dashboard/Delta";
 import {
+  formatCurrency,
+  formatCurrencyAggregate,
+  formatCurrencyExact,
+  formatPercent,
+} from "@/lib/format";
+import {
+  cashFlowDelta,
   delinquencies,
   netCashFlowThisMonth,
+  noiDelta,
   noiThisMonth,
   occupancyRate,
   rentCollectedThisMonth,
@@ -38,11 +46,15 @@ function MultifamilyHero({ property }: { property: Property }) {
         sub={`${occ.occupied} of ${occ.total} occupied`}
       />
       <KpiCard
-        label="Rent Collected"
+        label="Rent Collection"
         value={formatPercent(collectPct)}
-        sub={`${formatCurrency(collected, { compact: true })} of ${formatCurrency(expected, { compact: true })}`}
+        sub={`${formatCurrencyAggregate(collected, { compact: true })} of ${formatCurrencyAggregate(expected, { compact: true })}`}
       />
-      <KpiCard label="NOI" value={formatCurrency(noi)} sub="this month" />
+      <KpiCard
+        label="NOI"
+        value={formatCurrencyAggregate(noi)}
+        delta={<Delta delta={noiDelta(property)} polarity="normal" />}
+      />
       <KpiCard
         label="Delinquencies"
         value={formatCurrency(delq.totalOwed)}
@@ -89,8 +101,8 @@ function SfrHero({ property }: { property: Property }) {
       />
       <KpiCard
         label="Cash Flow"
-        value={formatCurrency(cashFlow)}
-        sub="this month"
+        value={formatCurrencyAggregate(cashFlow)}
+        delta={<Delta delta={cashFlowDelta(property)} polarity="normal" />}
       />
     </div>
   );
