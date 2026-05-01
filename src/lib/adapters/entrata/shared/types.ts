@@ -9,6 +9,7 @@ export type EntrataUnitStatus =
   | "Occupied No Notice"
   | "Notice Rented"
   | "Notice Unrented"
+  | "Vacant Rented Ready"
   | "Vacant Unrented Ready"
   | "Vacant Unrented Not Ready";
 
