@@ -69,15 +69,20 @@ export function parseAgedReceivables(input: Bytes): AgedReceivablesResult {
 
     const unitNumber = String(row[COL.bldgUnit] ?? "").trim();
     const tenantName = asString(row[COL.resident] ?? null)?.trim() ?? "";
+    const totalOwed = asNumber(row[COL.balance] ?? null) ?? 0;
+    // Skip prepayments and zero balances — only positive balances are
+    // delinquencies. Negative totals would otherwise inflate "rent collected"
+    // above 100% in the dashboard math.
+    if (totalOwed <= 0) continue;
     balances.push({
       unitNumber,
       tenantName,
-      totalOwed: asNumber(row[COL.balance] ?? null) ?? 0,
+      totalOwed,
       agingBuckets: {
-        days0to30: asNumber(row[COL.days0to30] ?? null) ?? 0,
-        days31to60: asNumber(row[COL.days31to60] ?? null) ?? 0,
-        days61to90: asNumber(row[COL.days61to90] ?? null) ?? 0,
-        daysOver90: asNumber(row[COL.daysOver90] ?? null) ?? 0,
+        days0to30: Math.max(asNumber(row[COL.days0to30] ?? null) ?? 0, 0),
+        days31to60: Math.max(asNumber(row[COL.days31to60] ?? null) ?? 0, 0),
+        days61to90: Math.max(asNumber(row[COL.days61to90] ?? null) ?? 0, 0),
+        daysOver90: Math.max(asNumber(row[COL.daysOver90] ?? null) ?? 0, 0),
       },
     });
   }

@@ -91,6 +91,20 @@ function bedsForUnitType(code: string): { bedrooms: number; bathrooms: number } 
   return { bedrooms: 1, bathrooms: 1 };
 }
 
+// Entrata residential unit-type codes follow predictable patterns: studios
+// (EFF/ERR/STUDIO) or floor-plan letters A/B/C with a digit. Anything else —
+// retail/office/storage spaces that occasionally land on the same Rent Roll —
+// is treated as commercial and dropped so it doesn't pollute occupancy and
+// rent metrics.
+function isResidentialUnitType(code: string): boolean {
+  const u = code.toUpperCase().trim();
+  if (!u) return false;
+  if (/EFF|ERR|STUDIO/.test(u)) return true;
+  if (/^[A-Z]+[ABC]\d/.test(u)) return true;
+  if (/[ABC]\d+$/.test(u)) return true;
+  return false;
+}
+
 function groupRows(rows: Row[], headerRowIndex: number): UnitGroup[] {
   const groups: UnitGroup[] = [];
   let current: UnitGroup | null = null;
@@ -167,7 +181,10 @@ function buildUnit(group: UnitGroup, propertySlug: string): Unit | null {
     : mainScheduled + extras.reduce((s, e) => s + e.scheduled, 0);
 
   const beds = bedsForUnitType(unitType);
-  const lease = buildLease(main, mainScheduled || scheduledRent);
+  // monthlyRent must equal the unit's full scheduled rent (Charge Total: row,
+  // including parking and other recurring charges) so the rent-collection
+  // metric in metrics.ts sums the same numbers a property manager would.
+  const lease = buildLease(main, scheduledRent);
 
   // Expected move-out can land on the unit even when the lease block is
   // suppressed (vacant unit with prior expected-out date); we don't surface
@@ -214,6 +231,7 @@ export function parseRentRoll(input: Bytes): RentRollResult {
   for (const g of groups) {
     const unit = buildUnit(g, propertySlug);
     if (!unit) continue;
+    if (!isResidentialUnitType(unit.unitType)) continue; // skip commercial spaces
     units.push(unit);
 
     // Capture positive balance for AR approximation. Skip vacant units (no

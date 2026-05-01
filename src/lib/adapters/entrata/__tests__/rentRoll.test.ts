@@ -60,6 +60,9 @@ describe("parseRentRoll — Lower Burnside", () => {
     const u = r.units.find((x) => x.unitNumber === "204");
     expect(u).toBeDefined();
     expect(u!.scheduledRent).toBeCloseTo(1499, 2); // 1314 + 185
+    // monthlyRent must equal the full Charge Total so rent-collection metrics
+    // sum the same numbers a property manager would (residential + parking).
+    expect(u!.currentLease!.monthlyRent).toBeCloseTo(1499, 2);
   });
 
   it("vacant unit 608 has no current lease and 0 scheduled rent", () => {
