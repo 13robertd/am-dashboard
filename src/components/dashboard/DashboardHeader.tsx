@@ -1,9 +1,13 @@
 import type { Property } from "@/types/portfolio";
 import { formatLongDate, formatMonthYearLong } from "@/lib/format";
-import { REPORT_TOTAL, reportsUploaded } from "@/lib/reports";
+import { REPORT_TOTAL } from "@/lib/reports";
 
-export function DashboardHeader({ property }: { property: Property }) {
-  const uploaded = reportsUploaded(property);
+interface DashboardHeaderProps {
+  property: Property;
+  uploaded: number;
+}
+
+export function DashboardHeader({ property, uploaded }: DashboardHeaderProps) {
   const lastUpdated = formatLongDate(new Date().toISOString().slice(0, 10));
 
   return (
