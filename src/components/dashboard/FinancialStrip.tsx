@@ -77,13 +77,6 @@ export function FinancialStrip({ property }: { property: Property }) {
           delta: opexDelta(property),
           polarity: "inverted",
         },
-        {
-          label: "Cash Flow",
-          value: cashFlow,
-          tone: cashFlow >= 0 ? "positive" : "negative",
-          delta: cashFlowDelta(property),
-          polarity: "normal",
-        },
       ];
 
   return (
