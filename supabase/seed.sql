@@ -1,0 +1,10 @@
+-- Owner Dashboard — empty seed (option b).
+--
+-- v1 ships with an empty workspace: no Burnside or other demo content
+-- pre-populated. Once an authenticated user signs in, they create their
+-- own properties via the dashboard's switcher and upload reports from
+-- there.
+--
+-- The hand-authored sample data in `src/data/sample.ts` is referenced
+-- only by the vitest suite — it intentionally never reaches production
+-- so the shared workspace can be used for real owner data from day one.
