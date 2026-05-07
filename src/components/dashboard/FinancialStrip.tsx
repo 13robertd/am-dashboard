@@ -101,7 +101,7 @@ export function FinancialStrip({ property }: { property: Property }) {
   );
 }
 
-function Step({
+export function Step({
   label,
   value,
   tone,

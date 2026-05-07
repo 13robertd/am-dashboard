@@ -194,3 +194,77 @@ export function cashFlowDelta(p: Property): MomDelta | null {
 export function maintenanceDelta(p: Property): MomDelta | null {
   return momDelta(p, (m) => m.maintenanceSpend);
 }
+
+// ---------------------------------------------------------------------------
+// Trailing 12-month aggregates
+// ---------------------------------------------------------------------------
+// Returns the up-to-N most recent months of financials, ending at (inclusive
+// of) the property's reporting period. Months that fall before any financial
+// data was loaded are simply absent from the array — pre-acquisition zeros
+// don't pollute the sum either way, so callers can just .reduce() the result.
+function trailingMonths(p: Property, count: number): MonthlyFinancial[] {
+  const sorted = [...p.monthlyFinancials].sort((a, b) =>
+    a.month.localeCompare(b.month),
+  );
+  const idx = sorted.findIndex((m) => m.month === p.reportingPeriod);
+  if (idx < 0) return [];
+  return sorted.slice(Math.max(0, idx - count + 1), idx + 1);
+}
+
+function sumT12<K extends keyof MonthlyFinancial>(
+  p: Property,
+  field: K,
+): number {
+  return trailingMonths(p, 12).reduce((s, m) => {
+    const v = m[field];
+    return s + (typeof v === "number" ? v : 0);
+  }, 0);
+}
+
+export function incomeT12(p: Property): number {
+  return sumT12(p, "income");
+}
+
+export function operatingExpensesT12(p: Property): number {
+  return sumT12(p, "operatingExpenses");
+}
+
+export function noiT12(p: Property): number {
+  return sumT12(p, "noi");
+}
+
+export function netCashFlowT12(p: Property): number {
+  return sumT12(p, "noi") - sumT12(p, "nonOperatingExpenses");
+}
+
+// Effective Gross Income for the trailing 12.
+// Gross Potential Rent + (signed) Vacancy Loss + (signed) Concessions.
+// Returns null when any month in the trailing window is missing the inputs
+// (e.g., sample data, or an Income Statement export that omits the GL lines).
+export function egiT12(p: Property): number | null {
+  const months = trailingMonths(p, 12);
+  if (months.length === 0) return null;
+  let total = 0;
+  for (const m of months) {
+    if (
+      m.grossPotentialRent === undefined ||
+      m.vacancyLoss === undefined ||
+      m.concessions === undefined
+    ) {
+      return null;
+    }
+    total += m.grossPotentialRent + m.vacancyLoss + m.concessions;
+  }
+  return total;
+}
+
+export function opexPercentT12(p: Property): number | null {
+  const egi = egiT12(p);
+  if (egi === null || egi === 0) return null;
+  return (operatingExpensesT12(p) / egi) * 100;
+}
+
+// TODO(t12-deltas): Add YoY-style trailing-12 deltas — current T12 vs the T12
+// ending one year earlier. Requires ≥24 months of Income Statement data,
+// which Entrata's "Trailing 12" export does not provide. Defer until a longer
+// historical export is available.

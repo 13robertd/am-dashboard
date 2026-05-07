@@ -59,4 +59,33 @@ describe("parseIncomeStatement — Lower Burnside", () => {
     expect(byMonth["2026-02-01"].noi).toBeCloseTo(49663.7, 2);
     expect(byMonth["2026-03-01"].maintenanceSpend).toBeCloseTo(6373.95, 2);
   });
+
+  // EGI inputs feed the trailing-12 OpEx % tile. The parser must populate
+  // grossPotentialRent / vacancyLoss / concessions on every month (signed as
+  // exported), or omit all three uniformly — partial population would make
+  // the metric look broken on edge months.
+  it("populates EGI-input fields on every month", () => {
+    const r = load();
+    for (const m of r.financials) {
+      expect(m.grossPotentialRent).toBeDefined();
+      expect(m.vacancyLoss).toBeDefined();
+      expect(m.concessions).toBeDefined();
+    }
+  });
+
+  it("April 2026 — GPR 83,861.27, Vacancy 0, Concessions −6,028", () => {
+    const r = load();
+    const apr = r.financials.find((m) => m.month === "2026-04-01")!;
+    expect(apr.grossPotentialRent).toBeCloseTo(83861.27, 2);
+    expect(apr.vacancyLoss).toBeCloseTo(0, 2);
+    expect(apr.concessions).toBeCloseTo(-6028, 2);
+  });
+
+  it("trailing-12 EGI = GPR + signed Vacancy + signed Concessions = $1,759,601.20", () => {
+    const r = load();
+    const sum = (k: "grossPotentialRent" | "vacancyLoss" | "concessions") =>
+      r.financials.reduce((s, m) => s + (m[k] ?? 0), 0);
+    const egi = sum("grossPotentialRent") + sum("vacancyLoss") + sum("concessions");
+    expect(egi).toBeCloseTo(1759601.2, 1);
+  });
 });

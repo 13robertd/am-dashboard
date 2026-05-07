@@ -1,18 +1,28 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { burnside, maple } from "@/data/sample";
+import { parseIncomeStatement } from "@/lib/adapters/entrata/incomeStatement";
+import type { Property } from "@/types/portfolio";
 import {
   cashFlowDelta,
   delinquencies,
+  egiT12,
   incomeDelta,
+  incomeT12,
   leaseExpirations,
   maintenanceDelta,
   momDelta,
+  netCashFlowT12,
   netCashFlowThisMonth,
   noiDelta,
+  noiT12,
   noiThisMonth,
   occupancyRate,
   openWorkOrders,
+  operatingExpensesT12,
   opexDelta,
+  opexPercentT12,
   rentExpectedThisMonth,
   statusBreakdown,
 } from "@/lib/metrics";
@@ -111,6 +121,46 @@ describe("MoM deltas — Burnside (April vs March 2026)", () => {
   it("momDelta returns null for January (no prior month)", () => {
     const janOnly = { ...burnside, reportingPeriod: "2026-01-01" };
     expect(momDelta(janOnly, (m) => m.income)).toBeNull();
+  });
+});
+
+describe("trailing 12 metrics", () => {
+  const fixturePath = path.resolve(
+    process.cwd(),
+    "test-fixtures/entrata/income-statement.xlsx",
+  );
+
+  function burnsideWithT12(): Property {
+    const r = parseIncomeStatement(readFileSync(fixturePath));
+    return {
+      ...burnside,
+      monthlyFinancials: r.financials,
+      reportingPeriod: "2026-04-01",
+    };
+  }
+
+  it("egiT12 returns null when EGI inputs are missing (sample data)", () => {
+    expect(egiT12(burnside)).toBeNull();
+    expect(opexPercentT12(burnside)).toBeNull();
+  });
+
+  it("T12 sums match the Income Statement Total column", () => {
+    const p = burnsideWithT12();
+    expect(incomeT12(p)).toBeCloseTo(1794943.56, 1);
+    expect(operatingExpensesT12(p)).toBeCloseTo(1646725.14, 1);
+    expect(noiT12(p)).toBeCloseTo(148218.42, 1);
+    // NOI ($148,218.42) − Non-op ($752,334.60) = −$604,116.18
+    expect(netCashFlowT12(p)).toBeCloseTo(-604116.18, 1);
+  });
+
+  it("egiT12 = $1,759,601.20 (GPR + signed Vacancy + signed Concessions)", () => {
+    expect(egiT12(burnsideWithT12())).toBeCloseTo(1759601.2, 1);
+  });
+
+  it("opexPercentT12 ≈ 93.6% (the Dec 2025 anomaly inflates the ratio)", () => {
+    const pct = opexPercentT12(burnsideWithT12());
+    expect(pct).not.toBeNull();
+    expect(pct!).toBeCloseTo(93.59, 1);
   });
 });
 

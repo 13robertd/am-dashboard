@@ -71,6 +71,23 @@ function findSubtotalRow(rows: Row[], headerRowIndex: number, label: string): Ro
   return null;
 }
 
+// Locate a GL account line by Account Name (column 1). Unlike subtotals these
+// rows DO have an Account code in column 0. Used for EGI-input lines that
+// don't appear as subtotals (Gross Potential Rent, Vacancy Loss,
+// Less: Concessions).
+function findAccountRow(rows: Row[], headerRowIndex: number, label: string): Row | null {
+  for (let i = headerRowIndex + 1; i < rows.length; i += 1) {
+    const row = rows[i];
+    if (!row) continue;
+    const accountCell = row[0];
+    const nameCell = asString(row[1] ?? null)?.trim();
+    if (accountCell !== null && accountCell !== "" && nameCell === label) {
+      return row;
+    }
+  }
+  return null;
+}
+
 function getNumber(row: Row, col: number): number {
   return asNumber(row[col] ?? null) ?? 0;
 }
@@ -108,6 +125,14 @@ export function parseIncomeStatement(input: Bytes): IncomeStatementResult {
   const netProfitRow = findSubtotalRow(rows, headerRowIndex, SUBTOTAL_LABELS.netProfit);
   const maintRow = findSubtotalRow(rows, headerRowIndex, SUBTOTAL_LABELS.maintenance);
 
+  // EGI inputs — individual GL account lines, not subtotals. Used by the
+  // trailing-12 OpEx % tile. All three rows must be present for EGI to be
+  // computable; if any are missing the per-month fields stay undefined.
+  const gprRow = findAccountRow(rows, headerRowIndex, "Gross Potential Rent");
+  const vacancyRow = findAccountRow(rows, headerRowIndex, "Vacancy Loss");
+  const concessionsRow = findAccountRow(rows, headerRowIndex, "Less: Concessions");
+  const hasEgiInputs = !!(gprRow && vacancyRow && concessionsRow);
+
   if (!incomeRow || !opexRow || !noiRow || !netProfitRow) {
     throw new EntrataParseError(
       "This Income Statement is missing required subtotal rows (Income, Operating Expenses, NOI, Net Profit).",
@@ -122,16 +147,23 @@ export function parseIncomeStatement(input: Bytes): IncomeStatementResult {
     const nonOperatingExpenses = nonOpExRow ? getNumber(nonOpExRow, index) : 0;
     const netProfit = getNumber(netProfitRow, index);
     const maintenanceSpend = maintRow ? getNumber(maintRow, index) : 0;
+    const grossPotentialRent = hasEgiInputs ? getNumber(gprRow!, index) : undefined;
+    const vacancyLoss = hasEgiInputs ? getNumber(vacancyRow!, index) : undefined;
+    const concessions = hasEgiInputs ? getNumber(concessionsRow!, index) : undefined;
 
     // Pre-acquisition / pre-data months show all zeros — drop them so the
-    // dashboard doesn't render flat lines.
+    // dashboard doesn't render flat lines. EGI-input fields are also zero
+    // in those months, so the trailing-12 sum is unaffected by the drop.
     if (
       income === 0 &&
       operatingExpenses === 0 &&
       noi === 0 &&
       nonOperatingExpenses === 0 &&
       netProfit === 0 &&
-      maintenanceSpend === 0
+      maintenanceSpend === 0 &&
+      (grossPotentialRent ?? 0) === 0 &&
+      (vacancyLoss ?? 0) === 0 &&
+      (concessions ?? 0) === 0
     ) {
       continue;
     }
@@ -144,6 +176,11 @@ export function parseIncomeStatement(input: Bytes): IncomeStatementResult {
       nonOperatingExpenses,
       netProfit,
       maintenanceSpend,
+      ...(hasEgiInputs && {
+        grossPotentialRent,
+        vacancyLoss,
+        concessions,
+      }),
     });
   }
 

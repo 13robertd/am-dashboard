@@ -14,6 +14,7 @@ import {
 import { HeroRow } from "@/components/dashboard/HeroRow";
 import { OperationsRow } from "@/components/dashboard/OperationsRow";
 import { FinancialStrip } from "@/components/dashboard/FinancialStrip";
+import { FinancialStripT12 } from "@/components/dashboard/FinancialStripT12";
 
 interface UploadNotices {
   warnings: string[];
@@ -125,6 +126,7 @@ export default function HomePage() {
         <HeroRow property={property} />
         <OperationsRow property={property} />
         <FinancialStrip property={property} />
+        <FinancialStripT12 property={property} />
       </main>
     </div>
   );

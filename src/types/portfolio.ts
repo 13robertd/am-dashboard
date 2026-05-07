@@ -79,6 +79,13 @@ export interface WorkOrder {
 
 // One row per month — derived from Entrata's Income Statement Trailing 12.
 // NOI is pre-computed by Entrata; store it, don't re-derive it.
+//
+// The three optional fields below carry the line items needed to compute
+// Effective Gross Income (EGI = grossPotentialRent + vacancyLoss + concessions
+// — the latter two are stored signed-negative as Entrata exports them, so the
+// sum reduces gross to effective). Only populated when an Entrata Income
+// Statement is parsed; sample data omits them, which causes the OpEx % tile
+// in the trailing-12 strip to show its empty state.
 export interface MonthlyFinancial {
   month: string;
   income: number;
@@ -87,4 +94,7 @@ export interface MonthlyFinancial {
   nonOperatingExpenses: number;
   netProfit: number;
   maintenanceSpend: number;
+  grossPotentialRent?: number;
+  vacancyLoss?: number;
+  concessions?: number;
 }
