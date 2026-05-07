@@ -17,11 +17,14 @@ export function DashboardHeader({ property, uploaded }: DashboardHeaderProps) {
   const cityState = [property.address.city, property.address.state]
     .filter((s) => s && s.trim() !== "")
     .join(", ");
-  const metaSegments = [
-    property.ownerName,
-    cityState,
-    `As of ${formatMonthYearLong(property.reportingPeriod)}`,
-  ].filter((s) => s && s.trim() !== "");
+  // Empty reportingPeriod (a manually-created property before any Income
+  // Statement is uploaded) means we can't render an "As of" label.
+  const asOf = property.reportingPeriod
+    ? `As of ${formatMonthYearLong(property.reportingPeriod)}`
+    : "";
+  const metaSegments = [property.ownerName, cityState, asOf].filter(
+    (s) => s && s.trim() !== "",
+  );
 
   return (
     <div className="border-b border-zinc-200 pb-4">

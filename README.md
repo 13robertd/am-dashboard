@@ -102,6 +102,30 @@ change. **No component changes.**
 3. Swap `src/lib/queries.ts` from reading `sample.ts` to reading the parsed
    `Property` from state — same return type.
 
+## Local data (multi-property v1)
+
+Properties live in browser localStorage under the key
+`am-dashboard:v1:properties` (a single JSON blob containing the property
+list, the active property id, and a one-way `hasBeenSeeded` flag). All
+reads and writes go through `src/lib/properties.ts`; components never
+touch localStorage directly. This is the seam we'll later swap for
+Supabase — the public API on that module is the contract.
+
+On a fresh visit the store is seeded with The Lower Burnside Lofts and
+its sample data, marked active. Once `hasBeenSeeded` flips true it stays
+true: deleting every property leaves the dashboard in an explicit "no
+properties" empty state rather than silently re-seeding Burnside.
+
+To reset to a clean slate (re-trigger the first-visit seed):
+
+```js
+// In the browser DevTools console:
+localStorage.removeItem('am-dashboard:v1:properties');
+location.reload();
+```
+
+Or use DevTools → Application → Local Storage → delete the key.
+
 ## What's deliberately out of scope (v1)
 
 - Real XLSX/CSV parsing (Entrata adapter is v2)

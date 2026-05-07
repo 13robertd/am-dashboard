@@ -1,7 +1,9 @@
+import { Building, FileSpreadsheet, Wallet } from "lucide-react";
 import type { Property } from "@/types/portfolio";
 import { Badge } from "@/components/ui/badge";
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { Delta } from "@/components/dashboard/Delta";
+import { PlaceholderCard } from "@/components/dashboard/PlaceholderCard";
 import {
   formatCurrency,
   formatCurrencyAggregate,
@@ -20,7 +22,11 @@ import {
   rentExpectedThisMonth,
 } from "@/lib/metrics";
 
-const isMultifamily = (p: Property) => p.units.length >= 5;
+// Multifamily detection has to tolerate the "no rent roll yet" case — a
+// freshly-created property has zero units. We pick the multifamily layout
+// in that scenario so the placeholder grid stays consistent with what the
+// dashboard will look like once a rent roll arrives.
+const isMultifamily = (p: Property) => p.units.length === 0 || p.units.length >= 5;
 
 export function HeroRow({ property }: { property: Property }) {
   return isMultifamily(property) ? (
@@ -31,6 +37,9 @@ export function HeroRow({ property }: { property: Property }) {
 }
 
 function MultifamilyHero({ property }: { property: Property }) {
+  const hasUnits = property.units.length > 0;
+  const hasFinancials = property.monthlyFinancials.length > 0;
+
   const occ = occupancyRate(property);
   const expected = rentExpectedThisMonth(property);
   const collected = rentCollectedThisMonth(property);
@@ -40,30 +49,62 @@ function MultifamilyHero({ property }: { property: Property }) {
 
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      <KpiCard
-        label="Occupancy"
-        value={formatPercent(occ.percent)}
-        sub={`${occ.occupied} of ${occ.total} occupied`}
-      />
-      <KpiCard
-        label="Rent Collection"
-        value={formatPercent(collectPct)}
-        sub={`${formatCurrencyAggregate(collected, { compact: true })} of ${formatCurrencyAggregate(expected, { compact: true })}`}
-      />
-      <KpiCard
-        label="NOI"
-        value={formatCurrencyAggregate(noi)}
-        delta={<Delta delta={noiDelta(property)} polarity="normal" />}
-      />
-      <KpiCard
-        label="Delinquencies"
-        value={formatCurrency(delq.totalOwed)}
-        sub={
-          delq.tenantCount === 0
-            ? "All current"
-            : `${delq.tenantCount} late · ${delq.oldestBucket} days`
-        }
-      />
+      {hasUnits ? (
+        <KpiCard
+          label="Occupancy"
+          value={formatPercent(occ.percent)}
+          sub={`${occ.occupied} of ${occ.total} occupied`}
+        />
+      ) : (
+        <PlaceholderCard
+          label="Occupancy"
+          message="Data needed — Upload Rent Roll to show occupancy."
+          icon={Building}
+        />
+      )}
+      {hasUnits ? (
+        <KpiCard
+          label="Rent Collection"
+          value={formatPercent(collectPct)}
+          sub={`${formatCurrencyAggregate(collected, { compact: true })} of ${formatCurrencyAggregate(expected, { compact: true })}`}
+        />
+      ) : (
+        <PlaceholderCard
+          label="Rent Collection"
+          message="Data needed — Upload Rent Roll to show rent collection."
+          icon={Wallet}
+        />
+      )}
+      {hasFinancials ? (
+        <KpiCard
+          label="NOI"
+          value={formatCurrencyAggregate(noi)}
+          delta={<Delta delta={noiDelta(property)} polarity="normal" />}
+        />
+      ) : (
+        <PlaceholderCard
+          label="NOI"
+          message="Data needed — Upload Income Statement to show NOI."
+          icon={FileSpreadsheet}
+        />
+      )}
+      {hasUnits ? (
+        <KpiCard
+          label="Delinquencies"
+          value={formatCurrency(delq.totalOwed)}
+          sub={
+            delq.tenantCount === 0
+              ? "All current"
+              : `${delq.tenantCount} late · ${delq.oldestBucket} days`
+          }
+        />
+      ) : (
+        <PlaceholderCard
+          label="Delinquencies"
+          message="Data needed — Upload Rent Roll to show delinquencies."
+          icon={Wallet}
+        />
+      )}
     </div>
   );
 }

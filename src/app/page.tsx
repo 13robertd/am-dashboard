@@ -1,10 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { Building, Info } from "lucide-react";
-import type { Property } from "@/types/portfolio";
-import { listProperties } from "@/lib/queries";
-import { REPORT_TOTAL, reportsUploaded } from "@/lib/reports";
+import { REPORT_TOTAL } from "@/lib/reports";
+import {
+  deleteProperty,
+  getServerSnapshot,
+  getSnapshot,
+  saveReportsFor,
+  setActiveProperty,
+  subscribe,
+} from "@/lib/properties";
 import { DashboardHeader } from "@/components/dashboard/DashboardHeader";
 import { PropertySwitcher } from "@/components/dashboard/PropertySwitcher";
 import {
@@ -16,13 +22,8 @@ import { OperationsRow } from "@/components/dashboard/OperationsRow";
 import { FinancialStrip } from "@/components/dashboard/FinancialStrip";
 import { FinancialStripT12 } from "@/components/dashboard/FinancialStripT12";
 
-interface UploadNotices {
-  warnings: string[];
-  missing: string[];
-}
-
-// Note: agedReceivables is intentionally omitted — the adapter already emits
-// a more specific warning when it approximates balances from the Rent Roll.
+// agedReceivables is intentionally omitted — the adapter already emits a
+// more specific warning when it approximates balances from the Rent Roll.
 const MISSING_LABEL: Record<string, string> = {
   incomeStatement: "No Income Statement uploaded — financials and NOI may show $0.",
   expiringLeases: "No Expiring Leases report uploaded — lease end dates come from the Rent Roll only.",
@@ -30,67 +31,37 @@ const MISSING_LABEL: Record<string, string> = {
 };
 
 export default function HomePage() {
-  const sampleProperties = useMemo(() => listProperties(), []);
-  const [uploadedProperties, setUploadedProperties] = useState<Property[]>([]);
-  const [uploadedCounts, setUploadedCounts] = useState<Record<string, number>>(
-    {},
-  );
-  const [uploadedNotices, setUploadedNotices] = useState<
-    Record<string, UploadNotices>
-  >({});
-  const [selectedId, setSelectedId] = useState<string>(
-    sampleProperties[0]?.id ?? "",
-  );
-
-  // Uploaded properties show first; sample data remains underneath as fallback.
-  const properties = useMemo(
-    () => [...uploadedProperties, ...sampleProperties],
-    [uploadedProperties, sampleProperties],
-  );
-
-  const uploadedIds = useMemo(
-    () => new Set(uploadedProperties.map((p) => p.id)),
-    [uploadedProperties],
-  );
-
-  // Derive the active id from the source of truth instead of synchronising
-  // it in an effect — keeps render output in sync without cascading updates.
-  const activeId = properties.some((p) => p.id === selectedId)
-    ? selectedId
-    : (properties[0]?.id ?? "");
-  const property = properties.find((p) => p.id === activeId);
-  if (!property) {
-    return <div className="p-8">No properties available.</div>;
-  }
-
-  const uploadedCount = uploadedIds.has(property.id)
-    ? (uploadedCounts[property.id] ?? 0)
-    : reportsUploaded(property);
-  const notices = uploadedIds.has(property.id)
-    ? uploadedNotices[property.id]
-    : undefined;
+  // useSyncExternalStore makes the store SSR-safe: during hydration React
+  // uses the server snapshot (an empty store) which matches what the server
+  // rendered, then switches to the live client snapshot which has been
+  // populated by the module's hydrate() call. The first useSyncExternalStore
+  // call on the client triggers hydrate() inside getSnapshot.
+  const store = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const properties = store.properties;
+  const activeId = store.activeId;
+  const active = properties.find((p) => p.id === activeId) ?? null;
 
   const handleParseSuccess = (payload: ParseSuccessPayload) => {
-    const { property: parsed, reportsParsedCount, warnings, reportsMissing } = payload;
-    setUploadedProperties((curr) => {
-      const idx = curr.findIndex((p) => p.id === parsed.id);
-      if (idx >= 0) {
-        const copy = [...curr];
-        copy[idx] = parsed;
-        return copy;
-      }
-      return [parsed, ...curr];
+    if (!activeId) return;
+    saveReportsFor(activeId, {
+      property: payload.property,
+      reports: {
+        reportsParsedCount: payload.reportsParsedCount,
+        warnings: payload.warnings,
+        missingReports: payload.reportsMissing,
+      },
     });
-    setUploadedCounts((curr) => ({ ...curr, [parsed.id]: reportsParsedCount }));
-    const missing = reportsMissing
-      .map((k) => MISSING_LABEL[k])
-      .filter((m): m is string => Boolean(m));
-    setUploadedNotices((curr) => ({
-      ...curr,
-      [parsed.id]: { warnings, missing },
-    }));
-    setSelectedId(parsed.id);
   };
+
+  const reports = active?.reports;
+  const noticeItems = active
+    ? [
+        ...(reports?.warnings ?? []),
+        ...(reports?.missingReports ?? [])
+          .map((k) => MISSING_LABEL[k])
+          .filter((m): m is string => Boolean(m)),
+      ]
+    : [];
 
   return (
     <div className="min-h-full bg-zinc-50">
@@ -103,37 +74,60 @@ export default function HomePage() {
             <span className="text-sm font-semibold text-zinc-900">Owner Dashboard</span>
           </div>
           <div className="flex items-center gap-3">
-            <ManageReportsButton
-              uploaded={uploadedCount}
-              total={REPORT_TOTAL}
-              onParseSuccess={handleParseSuccess}
-            />
+            {active ? (
+              <ManageReportsButton
+                uploaded={reports?.reportsParsedCount ?? 0}
+                total={REPORT_TOTAL}
+                onParseSuccess={handleParseSuccess}
+              />
+            ) : null}
             <PropertySwitcher
               properties={properties}
-              selectedId={activeId}
-              onSelect={setSelectedId}
-              uploadedIds={uploadedIds}
+              activeId={activeId}
+              onSelect={setActiveProperty}
+              onDelete={deleteProperty}
+              onCreated={setActiveProperty}
             />
           </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-8 space-y-6">
-        <DashboardHeader property={property} uploaded={uploadedCount} />
-        {notices && (notices.warnings.length > 0 || notices.missing.length > 0) ? (
-          <NoticeBanner notices={notices} />
-        ) : null}
-        <HeroRow property={property} />
-        <OperationsRow property={property} />
-        <FinancialStrip property={property} />
-        <FinancialStripT12 property={property} />
+        {active ? (
+          <>
+            <DashboardHeader
+              property={active.property}
+              uploaded={reports?.reportsParsedCount ?? 0}
+            />
+            {noticeItems.length > 0 ? <NoticeBanner items={noticeItems} /> : null}
+            <HeroRow property={active.property} />
+            <OperationsRow property={active.property} />
+            <FinancialStrip property={active.property} />
+            <FinancialStripT12 property={active.property} />
+          </>
+        ) : (
+          <EmptyState />
+        )}
       </main>
     </div>
   );
 }
 
-function NoticeBanner({ notices }: { notices: UploadNotices }) {
-  const items = [...notices.warnings, ...notices.missing];
+function EmptyState() {
+  return (
+    <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-6 py-12 text-center">
+      <Building size={28} strokeWidth={1.5} className="mx-auto text-zinc-400" />
+      <h2 className="mt-3 text-base font-semibold text-zinc-900">
+        No properties yet
+      </h2>
+      <p className="mt-1 text-sm text-zinc-500">
+        Use the Property menu in the header to add your first property.
+      </p>
+    </div>
+  );
+}
+
+function NoticeBanner({ items }: { items: string[] }) {
   return (
     <div
       role="status"

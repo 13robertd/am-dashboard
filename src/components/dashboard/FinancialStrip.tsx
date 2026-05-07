@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, FileSpreadsheet } from "lucide-react";
 import type { Property } from "@/types/portfolio";
 import { Delta, type DeltaPolarity } from "@/components/dashboard/Delta";
 import { formatCurrencyAggregate } from "@/lib/format";
@@ -15,7 +15,7 @@ import {
   operatingExpensesThisMonth,
 } from "@/lib/metrics";
 
-const isMultifamily = (p: Property) => p.units.length >= 5;
+const isMultifamily = (p: Property) => p.units.length === 0 || p.units.length >= 5;
 
 interface StepDef {
   label: string;
@@ -26,6 +26,25 @@ interface StepDef {
 }
 
 export function FinancialStrip({ property }: { property: Property }) {
+  const hasFinancials = property.monthlyFinancials.length > 0;
+
+  if (!hasFinancials) {
+    // Single placeholder spans the whole strip — four side-by-side
+    // identical "Data needed" boxes is worse UX than one clean message
+    // explaining what the strip will show once an Income Statement lands.
+    return (
+      <div className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+        <div className="mb-3 text-xs font-medium uppercase tracking-wide text-zinc-500">
+          Financials — this month
+        </div>
+        <div className="flex items-center gap-3 rounded-md border border-zinc-100 bg-zinc-50/50 px-4 py-6 text-sm text-zinc-500">
+          <FileSpreadsheet size={18} strokeWidth={1.5} className="shrink-0 text-zinc-400" />
+          <span>Data needed — Upload Income Statement to show this month&apos;s financials.</span>
+        </div>
+      </div>
+    );
+  }
+
   const income = incomeThisMonth(property);
   const opex = operatingExpensesThisMonth(property);
   const noi = noiThisMonth(property);

@@ -1,3 +1,4 @@
+import { FileSpreadsheet } from "lucide-react";
 import type { Property } from "@/types/portfolio";
 import { Step } from "@/components/dashboard/FinancialStrip";
 import { formatPercent } from "@/lib/format";
@@ -9,7 +10,7 @@ import {
   operatingExpensesT12,
 } from "@/lib/metrics";
 
-const isMultifamily = (p: Property) => p.units.length >= 5;
+const isMultifamily = (p: Property) => p.units.length === 0 || p.units.length >= 5;
 
 // Trailing-12 sibling of FinancialStrip. Mirrors its tile structure and
 // typography so the two sections read as a pair. Deltas are intentionally
@@ -18,6 +19,22 @@ export function FinancialStripT12({ property }: { property: Property }) {
   // Single-family properties don't get the multi-tile flow strip in the
   // monthly section either; preserve that asymmetry here.
   if (!isMultifamily(property)) return null;
+
+  const hasFinancials = property.monthlyFinancials.length > 0;
+
+  if (!hasFinancials) {
+    return (
+      <div className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+        <div className="mb-3 text-xs font-medium uppercase tracking-wide text-zinc-500">
+          Financials — trailing 12
+        </div>
+        <div className="flex items-center gap-3 rounded-md border border-zinc-100 bg-zinc-50/50 px-4 py-6 text-sm text-zinc-500">
+          <FileSpreadsheet size={18} strokeWidth={1.5} className="shrink-0 text-zinc-400" />
+          <span>Data needed — Upload Income Statement (Trailing 12) to show trailing-12 financials.</span>
+        </div>
+      </div>
+    );
+  }
 
   const income = incomeT12(property);
   const opex = operatingExpensesT12(property);

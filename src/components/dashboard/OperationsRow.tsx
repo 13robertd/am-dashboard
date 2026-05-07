@@ -1,4 +1,4 @@
-import { Wrench } from "lucide-react";
+import { CalendarClock, FileSpreadsheet, Wrench } from "lucide-react";
 import type { Property } from "@/types/portfolio";
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { Delta } from "@/components/dashboard/Delta";
@@ -14,7 +14,9 @@ import {
   maintenanceSpendThisMonth,
 } from "@/lib/metrics";
 
-const isMultifamily = (p: Property) => p.units.length >= 5;
+// Match HeroRow: empty properties (no rent roll yet) take the multifamily
+// layout so placeholders render in a consistent grid.
+const isMultifamily = (p: Property) => p.units.length === 0 || p.units.length >= 5;
 
 export function OperationsRow({ property }: { property: Property }) {
   return isMultifamily(property) ? (
@@ -25,6 +27,9 @@ export function OperationsRow({ property }: { property: Property }) {
 }
 
 function MultifamilyOps({ property }: { property: Property }) {
+  const hasUnits = property.units.length > 0;
+  const hasFinancials = property.monthlyFinancials.length > 0;
+
   const expirations = leaseExpirations(property);
   const maintSpend = maintenanceSpendThisMonth(property);
   const top = expirations.slice(0, 5);
@@ -36,34 +41,50 @@ function MultifamilyOps({ property }: { property: Property }) {
         message="Data needed — Upload Work Order Report to show open work orders."
         icon={Wrench}
       />
-      <KpiCard
-        label="Upcoming Lease Expirations"
-        value={`${expirations.length} in 90d`}
-        sub={
-          top.length === 0 ? (
-            "No upcoming expirations"
-          ) : (
-            <ul className="mt-2 space-y-1 text-xs">
-              {top.map((e) => (
-                <li key={e.unitNumber} className="flex justify-between gap-3 text-zinc-600">
-                  <span className="truncate">
-                    <span className="font-medium text-zinc-700">#{e.unitNumber}</span>{" "}
-                    {e.tenant}
-                  </span>
-                  <span className="tabular-nums text-zinc-500">
-                    {formatShortDate(e.endDate)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )
-        }
-      />
-      <KpiCard
-        label="Maintenance Spend"
-        value={formatCurrencyAggregate(maintSpend)}
-        delta={<Delta delta={maintenanceDelta(property)} polarity="neutral" />}
-      />
+      {hasUnits ? (
+        <KpiCard
+          label="Upcoming Lease Expirations"
+          value={`${expirations.length} in 90d`}
+          sub={
+            top.length === 0 ? (
+              "No upcoming expirations"
+            ) : (
+              <ul className="mt-2 space-y-1 text-xs">
+                {top.map((e) => (
+                  <li key={e.unitNumber} className="flex justify-between gap-3 text-zinc-600">
+                    <span className="truncate">
+                      <span className="font-medium text-zinc-700">#{e.unitNumber}</span>{" "}
+                      {e.tenant}
+                    </span>
+                    <span className="tabular-nums text-zinc-500">
+                      {formatShortDate(e.endDate)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )
+          }
+        />
+      ) : (
+        <PlaceholderCard
+          label="Upcoming Lease Expirations"
+          message="Data needed — Upload Rent Roll to show upcoming lease expirations."
+          icon={CalendarClock}
+        />
+      )}
+      {hasFinancials ? (
+        <KpiCard
+          label="Maintenance Spend"
+          value={formatCurrencyAggregate(maintSpend)}
+          delta={<Delta delta={maintenanceDelta(property)} polarity="neutral" />}
+        />
+      ) : (
+        <PlaceholderCard
+          label="Maintenance Spend"
+          message="Data needed — Upload Income Statement to show maintenance spend."
+          icon={FileSpreadsheet}
+        />
+      )}
     </div>
   );
 }
