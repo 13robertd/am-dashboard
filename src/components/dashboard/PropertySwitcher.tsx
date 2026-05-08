@@ -4,10 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { Building2, Check, ChevronDown, Plus, Trash2 } from "lucide-react";
 import { AddPropertyDialog } from "@/components/dashboard/AddPropertyDialog";
 import { ConfirmDeleteDialog } from "@/components/dashboard/ConfirmDeleteDialog";
-import type { StoredProperty } from "@/lib/properties";
+import type { PropertyRecord } from "@/lib/properties";
 
 interface PropertySwitcherProps {
-  properties: StoredProperty[];
+  properties: PropertyRecord[];
   activeId: string | null;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
@@ -23,7 +23,7 @@ export function PropertySwitcher({
 }: PropertySwitcherProps) {
   const [open, setOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState<StoredProperty | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<PropertyRecord | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const active = properties.find((p) => p.id === activeId) ?? null;

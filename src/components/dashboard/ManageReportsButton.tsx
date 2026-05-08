@@ -2,16 +2,17 @@
 
 import { useRef, useState } from "react";
 import { Check, FileText, Trash2, Upload, X } from "lucide-react";
-import type { Property } from "@/types/portfolio";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import {
   detectEntrataReportType,
   EntrataParseError,
-  parseEntrataReports,
+  parseSingleReport,
+  SLOT_TO_REPORT_TYPE,
   type EntrataReportType,
   type EntrataUpload,
 } from "@/lib/adapters/entrata";
+import { saveReport } from "@/lib/properties";
 
 type SlotKey = keyof EntrataUpload;
 
@@ -51,19 +52,18 @@ const REPORT_TYPE_LABEL: Record<EntrataReportType, string> = {
 };
 
 export interface ParseSuccessPayload {
-  property: Property;
   reportsParsedCount: number;
-  warnings: string[];
-  reportsMissing: Array<keyof EntrataUpload>;
 }
 
 interface ManageReportsButtonProps {
+  propertyId: string;          // active property — every saveReport attaches here
   uploaded: number;
   total: number;
   onParseSuccess: (payload: ParseSuccessPayload) => void;
 }
 
 export function ManageReportsButton({
+  propertyId,
   uploaded,
   total,
   onParseSuccess,
@@ -117,28 +117,24 @@ export function ManageReportsButton({
     setSlotErrors({});
     setParsing(true);
 
-    // Read every supplied file's bytes once, then run wrong-slot detection
-    // before the heavier parse so we can attribute mismatches to the offending
-    // slot instead of crashing with a generic error.
-    const upload: EntrataUpload = {};
+    // Read every supplied file's bytes once. We need the bytes for both
+    // wrong-slot detection AND the per-slot parse — File.arrayBuffer()
+    // can only be called once safely.
     const buffers: Partial<Record<SlotKey, ArrayBuffer>> = {};
     for (const key of SLOT_ORDER) {
       const file = files[key];
-      if (file) {
-        const buf = await file.arrayBuffer();
-        buffers[key] = buf;
-        upload[key] = buf;
-      }
+      if (file) buffers[key] = await file.arrayBuffer();
     }
 
+    // Wrong-slot detection runs first so we can flag every offending file at
+    // once instead of failing on the first parse error.
     const wrongSlot: Partial<Record<SlotKey, string>> = {};
     const nextStates: Partial<Record<SlotKey, SlotState>> = {};
     for (const key of SLOT_ORDER) {
       const buf = buffers[key];
       if (!buf) continue;
-      // Skip detection for the workOrders slot — we don't parse it yet, so
-      // there's nothing to validate against.
       if (key === "workOrders") {
+        // We don't parse this format yet, so nothing to validate against.
         nextStates[key] = "uploaded";
         continue;
       }
@@ -159,31 +155,51 @@ export function ManageReportsButton({
       return;
     }
 
-    try {
-      const result = await parseEntrataReports(upload);
-      // Mark every supplied slot as parsed for the brief moment before closing.
-      const parsedStates: Partial<Record<SlotKey, SlotState>> = {};
-      for (const key of SLOT_ORDER) {
-        if (files[key]) parsedStates[key] = "parsed";
-      }
-      setSlotStates(parsedStates);
-      onParseSuccess({
-        property: result.property,
-        reportsParsedCount: result.reportsParsed.length,
-        warnings: result.warnings,
-        reportsMissing: result.reportsMissing,
-      });
-      window.setTimeout(handleClose, 250);
-    } catch (err) {
-      const message =
-        err instanceof EntrataParseError
-          ? err.message
-          : err instanceof Error
+    // Parse each file independently, then save its parsed payload to its own
+    // `reports` row in Supabase. Each save also uploads the raw file to
+    // storage and replaces any previous report of that type for this
+    // property (the unique constraint on (property_id, report_type) makes
+    // this an upsert).
+    let parsedCount = 0;
+    const perSlotErrors: Partial<Record<SlotKey, string>> = {};
+    const finalStates: Partial<Record<SlotKey, SlotState>> = { ...nextStates };
+    for (const key of SLOT_ORDER) {
+      const file = files[key];
+      const buf = buffers[key];
+      if (!file || !buf) continue;
+      try {
+        const payload = parseSingleReport(key, buf);
+        if (!payload) {
+          // workOrders or anything else we don't have a parser for yet —
+          // leave the file out of Supabase entirely until we add support.
+          finalStates[key] = "uploaded";
+          continue;
+        }
+        await saveReport(propertyId, SLOT_TO_REPORT_TYPE[key], file, payload.data);
+        finalStates[key] = "parsed";
+        parsedCount += 1;
+      } catch (err) {
+        const message =
+          err instanceof EntrataParseError
             ? err.message
-            : "Couldn't parse the uploaded reports.";
-      setGlobalError(message);
-      setParsing(false);
+            : err instanceof Error
+              ? err.message
+              : "Couldn't parse this report.";
+        perSlotErrors[key] = message;
+        finalStates[key] = "error";
+      }
     }
+
+    setSlotStates(finalStates);
+    if (Object.keys(perSlotErrors).length > 0) {
+      setSlotErrors(perSlotErrors);
+      setGlobalError("One or more files failed to parse or upload — see the highlighted rows.");
+      setParsing(false);
+      return;
+    }
+
+    onParseSuccess({ reportsParsedCount: parsedCount });
+    window.setTimeout(handleClose, 250);
   };
 
   return (

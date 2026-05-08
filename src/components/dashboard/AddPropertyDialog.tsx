@@ -31,16 +31,25 @@ export function AddPropertyDialog({
   onCreated,
 }: AddPropertyDialogProps) {
   const [form, setForm] = useState<ManualPropertyInput>(EMPTY);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const trimmedName = form.name.trim();
-  const canSave = trimmedName.length > 0;
+  const canSave = trimmedName.length > 0 && !submitting;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSave) return;
-    const created = createProperty(form);
-    onCreated(created.id);
-    onClose();
+    setError(null);
+    setSubmitting(true);
+    try {
+      const created = await createProperty(form);
+      onCreated(created.id);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't create property.");
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -86,12 +95,21 @@ export function AddPropertyDialog({
           />
         </div>
 
+        {error ? (
+          <div
+            role="alert"
+            className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
+          >
+            {error}
+          </div>
+        ) : null}
+
         <div className="mt-4 flex items-center justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button type="submit" variant="primary" disabled={!canSave}>
-            Add property
+            {submitting ? "Adding…" : "Add property"}
           </Button>
         </div>
       </form>

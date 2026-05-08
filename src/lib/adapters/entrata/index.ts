@@ -1,9 +1,4 @@
-import type {
-  ARBalance,
-  Property,
-  PropertyType,
-  Unit,
-} from "@/types/portfolio";
+import type { Property } from "@/types/portfolio";
 import { parseRentRoll } from "./rentRoll";
 import { parseIncomeStatement } from "./incomeStatement";
 import { parseExpiringLeases } from "./expiringLeases";
@@ -15,12 +10,28 @@ import {
   readWorkbook,
   type Bytes,
 } from "./shared/sheet";
-import { periodToReportingISO, slugify } from "./shared/metadata";
-import type { EntrataReportType, RentRollBalance } from "./shared/types";
+import { slugify } from "./shared/metadata";
+import {
+  composeProperty,
+  type PropertyMeta,
+  type ReportPayload,
+} from "./compose";
+import type { EntrataReportType } from "./shared/types";
 
-// Public Entrata adapter. The rest of the app sees only this entrypoint and
-// the normalised `Property` shape it returns — Entrata-specific structures
-// stay sealed behind this folder.
+// Public Entrata adapter. Two entry points now coexist:
+//
+//   parseEntrataReports(files)
+//     The legacy "all-at-once" path used by the upload modal. Parses every
+//     supplied file, then delegates to composeProperty to assemble them.
+//     Returns a single merged Property.
+//
+//   parseSingleReport(reportType, bytes)
+//     The Supabase-backed path. Parses one file, returns its parsed payload
+//     (the shape stored in `reports.parsed_data`). The page assembles per-
+//     property reports via composeProperty on read.
+//
+// Both routes share the per-parser implementations and the composeProperty
+// merge step, so output is identical.
 
 export interface EntrataUpload {
   rentRoll?: Bytes;
@@ -45,114 +56,21 @@ const ALL_REPORTS: Array<keyof EntrataUpload> = [
   "workOrders",
 ];
 
-function inferPropertyType(unitCount: number): PropertyType {
-  if (unitCount <= 1) return "single-family";
-  if (unitCount <= 4) return "small-multifamily";
-  return "apartment-building";
-}
+// Map between the legacy slot keys and the canonical report_type strings
+// stored in the database.
+export const SLOT_TO_REPORT_TYPE = {
+  rentRoll: "rent_roll",
+  incomeStatement: "income_statement_t12",
+  expiringLeases: "expiring_leases",
+  agedReceivables: "aged_receivables",
+  workOrders: "work_orders",
+} as const satisfies Record<keyof EntrataUpload, string>;
 
-// Reconcile property names across reports. The Rent Roll is authoritative —
-// everything else just contributes a warning when it disagrees.
-function reconcilePropertyName(
-  primary: string,
-  others: Array<{ source: string; name: string }>,
-  warnings: string[],
-): string {
-  for (const o of others) {
-    if (!o.name) continue;
-    if (o.name !== primary) {
-      warnings.push(
-        `Note: ${o.source} references "${o.name}" instead of "${primary}". Using the Rent Roll's name.`,
-      );
-    }
-  }
-  return primary;
-}
-
-function applyExpiringLeases(
-  units: Unit[],
-  leases: ReturnType<typeof parseExpiringLeases>["leases"],
-  warnings: string[],
-): Unit[] {
-  const byNumber = new Map(units.map((u) => [u.unitNumber, u]));
-  for (const row of leases) {
-    const unit = byNumber.get(row.unitNumber);
-    if (!unit) {
-      warnings.push(
-        `Expiring Leases references unit ${row.unitNumber}, which isn't in the Rent Roll.`,
-      );
-      continue;
-    }
-    if (!unit.currentLease) continue; // vacant; skip enrichment.
-    if (row.isMonthToMonth && unit.currentLease.endDate === null) {
-      // Already null in Rent Roll; nothing to do.
-      continue;
-    }
-    if (row.isMonthToMonth) {
-      unit.currentLease.endDate = null;
-    } else if (row.leaseEnd && !unit.currentLease.endDate) {
-      unit.currentLease.endDate = row.leaseEnd;
-    }
-  }
-  return units;
-}
-
-function applyAgedReceivables(
-  units: Unit[],
-  balances: ReturnType<typeof parseAgedReceivables>["balances"],
-  warnings: string[],
-): ARBalance[] {
-  const byNumber = new Map(units.map((u) => [u.unitNumber, u]));
-  const result: ARBalance[] = [];
-  for (const b of balances) {
-    const unit = byNumber.get(b.unitNumber);
-    if (!unit) {
-      warnings.push(
-        `Aged Receivables references unit ${b.unitNumber}, which isn't in the Rent Roll.`,
-      );
-      continue;
-    }
-    result.push({
-      unitId: unit.id,
-      tenantName: b.tenantName,
-      totalOwed: b.totalOwed,
-      agingBuckets: b.agingBuckets,
-    });
-  }
-  return result;
-}
-
-// Approximate AR balances from the Rent Roll's Balance column when no AR
-// report was uploaded. Positive balance = delinquent; bucketed as 0-30 since
-// we lack aging info.
-function approximateBalancesFromRentRoll(
-  units: Unit[],
-  rentRollBalances: RentRollBalance[],
-): ARBalance[] {
-  const byNumber = new Map(units.map((u) => [u.unitNumber, u]));
-  const result: ARBalance[] = [];
-  for (const b of rentRollBalances) {
-    const unit = byNumber.get(b.unitNumber);
-    if (!unit) continue;
-    result.push({
-      unitId: unit.id,
-      tenantName: b.tenantName,
-      totalOwed: b.balance,
-      agingBuckets: {
-        days0to30: b.balance,
-        days31to60: 0,
-        days61to90: 0,
-        daysOver90: 0,
-      },
-    });
-  }
-  return result;
-}
+export type SlotKey = keyof EntrataUpload;
 
 export async function parseEntrataReports(
   files: EntrataUpload,
 ): Promise<EntrataParseResult> {
-  const warnings: string[] = [];
   const parsed: Array<keyof EntrataUpload> = [];
   const missing: Array<keyof EntrataUpload> = [];
   for (const r of ALL_REPORTS) {
@@ -166,68 +84,43 @@ export async function parseEntrataReports(
     );
   }
 
-  // Rent Roll first — it provides identity (property name, units).
-  const rr = parseRentRoll(files.rentRoll);
-  let units = rr.units;
+  const reports: ReportPayload[] = [];
+  reports.push({ reportType: "rent_roll", data: parseRentRoll(files.rentRoll) });
 
-  // Income Statement → monthlyFinancials.
-  let monthlyFinancials = [] as ReturnType<
-    typeof parseIncomeStatement
-  >["financials"];
-  let incomeName = "";
   if (files.incomeStatement) {
-    const inc = parseIncomeStatement(files.incomeStatement);
-    monthlyFinancials = inc.financials;
-    incomeName = inc.propertyName;
+    reports.push({
+      reportType: "income_statement_t12",
+      data: parseIncomeStatement(files.incomeStatement),
+    });
   }
-
-  // Expiring Leases → augment lease data.
-  let expiringName = "";
   if (files.expiringLeases) {
-    const exp = parseExpiringLeases(files.expiringLeases);
-    units = applyExpiringLeases(units, exp.leases, warnings);
-    expiringName = exp.propertyName;
+    reports.push({
+      reportType: "expiring_leases",
+      data: parseExpiringLeases(files.expiringLeases),
+    });
   }
-
-  // Aged Receivables → arBalances.
-  let arName = "";
-  let arBalances: ARBalance[];
   if (files.agedReceivables) {
-    const ar = parseAgedReceivables(files.agedReceivables);
-    arBalances = applyAgedReceivables(units, ar.balances, warnings);
-    arName = ar.propertyName;
-  } else {
-    arBalances = approximateBalancesFromRentRoll(units, rr.balances);
-    if (arBalances.length > 0) {
-      warnings.push(
-        "Aged Receivables not uploaded — showing balances from the Rent Roll (all bucketed as 0–30 days).",
-      );
-    }
+    reports.push({
+      reportType: "aged_receivables",
+      data: parseAgedReceivables(files.agedReceivables),
+    });
   }
+  // workOrders intentionally not parsed yet — accepted but no parser exists.
 
-  const propertyName = reconcilePropertyName(
-    rr.propertyName,
-    [
-      { source: "Income Statement", name: incomeName },
-      { source: "Expiring Leases", name: expiringName },
-      { source: "Aged Receivables", name: arName },
-    ],
-    warnings,
-  );
-
-  const slug = slugify(propertyName) || "uploaded";
-  const property: Property = {
+  // The legacy path doesn't have a stored property row to draw metadata from,
+  // so we synthesize an id from the parsed property name.
+  const rentRollData = reports[0]!.data as Awaited<
+    ReturnType<typeof parseRentRoll>
+  >;
+  const slug = slugify(rentRollData.propertyName) || "uploaded";
+  const meta: PropertyMeta = {
     id: `uploaded-${slug}`,
-    name: propertyName || "Uploaded Property",
+    name: "", // empty so composeProperty falls back to the parsed name
     ownerName: "",
     address: { street: "", city: "", state: "", zip: "" },
-    propertyType: inferPropertyType(units.length),
-    reportingPeriod: periodToReportingISO(rr.period),
-    units,
-    arBalances,
-    workOrders: [],
-    monthlyFinancials,
   };
+
+  const { property, warnings } = composeProperty(meta, reports);
 
   return {
     property,
@@ -235,6 +128,34 @@ export async function parseEntrataReports(
     reportsParsed: parsed,
     reportsMissing: missing,
   };
+}
+
+// Stage 3: per-report upload path used by the Supabase-backed flow. Each
+// file is parsed independently; the returned payload is what we'll write
+// into `reports.parsed_data`.
+export function parseSingleReport(
+  slot: SlotKey,
+  bytes: Bytes,
+): ReportPayload | null {
+  switch (slot) {
+    case "rentRoll":
+      return { reportType: "rent_roll", data: parseRentRoll(bytes) };
+    case "incomeStatement":
+      return {
+        reportType: "income_statement_t12",
+        data: parseIncomeStatement(bytes),
+      };
+    case "expiringLeases":
+      return { reportType: "expiring_leases", data: parseExpiringLeases(bytes) };
+    case "agedReceivables":
+      return {
+        reportType: "aged_receivables",
+        data: parseAgedReceivables(bytes),
+      };
+    case "workOrders":
+      // Not yet parsed — return null so the caller can skip the DB write.
+      return null;
+  }
 }
 
 // Public, lightweight detector — used by the modal to attribute wrong-slot
@@ -253,3 +174,5 @@ export function detectEntrataReportType(input: Bytes): EntrataReportType {
 
 export type { EntrataReportType } from "./shared/types";
 export { EntrataParseError } from "./shared/sheet";
+export { composeProperty } from "./compose";
+export type { ReportPayload, PropertyMeta } from "./compose";

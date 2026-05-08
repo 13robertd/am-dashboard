@@ -1,31 +1,27 @@
-// Property storage layer.
+// Supabase-backed properties / reports data layer.
 //
-// v1 backs the dashboard's properties with localStorage; the API surface here
-// is the seam we'll later swap for Supabase (or any other server-backed
-// store). Components MUST NOT touch localStorage directly — they go through
-// these named exports so the swap stays mechanical.
+// This is the single seam every component goes through. The implementation
+// changed from localStorage → Supabase, but the public API stays close in
+// shape: list, get, create, delete, save-report, plus a subscribe() for
+// realtime cross-tab / cross-user sync.
 //
-// Storage contract:
-//   key:   `am-dashboard:v1:properties`
-//   value: serialized Store object (see below)
+// Active-property selection lives in the URL (`?propertyId=…`) rather than
+// localStorage, so links are shareable. The hook in
+// `lib/useActiveProperty.ts` reads the param; this module exposes
+// `getActiveProperty(searchParams)` for any non-React caller.
 //
-// SSR / hydration notes:
-//   - Module-level reads of `localStorage` are guarded on `typeof window`.
-//   - On the server `memory` is just `emptyStore()`; the SSR snapshot
-//     returned by `getServerSnapshot()` matches that exactly so the client's
-//     first render (during React hydration) doesn't diverge from the server.
-//   - Right after hydration React switches to the client snapshot via
-//     `useSyncExternalStore`, which sees the rehydrated `memory` populated
-//     from localStorage, and re-renders with the real data.
-//   - Cross-tab updates: the `storage` event only fires in OTHER tabs. We
-//     pair it with an in-process `subscribers` set so same-tab writes by
-//     `createProperty`/`deleteProperty`/etc. also notify subscribers.
+// Manual metadata (name, address, owner, city, state) ALWAYS wins over
+// anything inferred from uploaded report payloads — see composeProperty.
 
 import type { Property } from "@/types/portfolio";
-import { burnside } from "@/data/sample";
+import {
+  composeProperty,
+  type ReportPayload,
+  type PropertyMeta,
+} from "@/lib/adapters/entrata/compose";
+import { supabaseBrowser } from "@/lib/supabase/client";
 
-const STORAGE_KEY = "am-dashboard:v1:properties";
-const STORAGE_VERSION = 1;
+const REPORTS_BUCKET = "reports";
 
 export interface ManualPropertyInput {
   name: string;
@@ -35,333 +31,334 @@ export interface ManualPropertyInput {
   state?: string;
 }
 
-export interface StoredReports {
-  reportsParsedCount: number;
-  warnings: string[];
-  missingReports: string[];
-}
-
-export interface StoredProperty {
+// One row of `public.properties`, with its associated reports composed in.
+// This is what every page / component actually renders.
+export interface PropertyRecord {
   id: string;
-  property: Property;
-  reports: StoredReports;
+  property: Property;          // composed (manual meta + parsed reports)
+  reports: ReportRow[];
+  warnings: string[];          // composeProperty diagnostics
+  createdAt: string;
 }
 
-interface Store {
-  version: number;
-  properties: StoredProperty[];
-  activeId: string | null;
-  // Set the first time we seed Burnside (or the first time the user creates
-  // a property). Once true it stays true forever — even when the user
-  // deletes every property — so we never re-seed silently. The switcher
-  // shows an empty state instead.
-  hasBeenSeeded: boolean;
+export interface ReportRow {
+  id: string;
+  propertyId: string;
+  reportType: ReportPayload["reportType"];
+  storagePath: string;
+  fileName: string;
+  parsedData: ReportPayload["data"];
+  uploadedAt: string;
+  uploadedBy: string | null;
 }
 
-function emptyStore(): Store {
+// ---------------------------------------------------------------------------
+// Internal: row → PropertyMeta and row → PropertyRecord helpers
+// ---------------------------------------------------------------------------
+
+interface PropertyRow {
+  id: string;
+  name: string;
+  address: string | null;
+  owner_entity: string | null;
+  city: string | null;
+  state: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ReportDbRow {
+  id: string;
+  property_id: string;
+  report_type: ReportPayload["reportType"];
+  storage_path: string;
+  file_name: string;
+  parsed_data: ReportPayload["data"];
+  uploaded_at: string;
+  uploaded_by: string | null;
+}
+
+function rowToMeta(row: PropertyRow): PropertyMeta {
   return {
-    version: STORAGE_VERSION,
-    properties: [],
-    activeId: null,
-    hasBeenSeeded: false,
-  };
-}
-
-let memory: Store = emptyStore();
-let hydrated = false;
-const subscribers = new Set<() => void>();
-
-function isBrowser(): boolean {
-  return typeof window !== "undefined";
-}
-
-function safeRead(): Store | null {
-  if (!isBrowser()) return null;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<Store> | null;
-    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.properties)) {
-      return null;
-    }
-    // Fill in any missing top-level fields defensively so a corrupted blob
-    // can't take down the dashboard.
-    return {
-      version: parsed.version ?? STORAGE_VERSION,
-      properties: parsed.properties as StoredProperty[],
-      activeId: parsed.activeId ?? null,
-      hasBeenSeeded: parsed.hasBeenSeeded ?? true,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function safeWrite(s: Store): void {
-  if (!isBrowser()) return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-  } catch {
-    // Quota exceeded, private mode, etc. In-memory state still works for the
-    // current session — we just lose persistence.
-  }
-}
-
-function emit(): void {
-  for (const cb of subscribers) cb();
-}
-
-function seedBurnsideIntoMemory(): void {
-  // Burnside is treated as a fully-loaded property — units, AR, monthly
-  // financials are all hand-authored. We declare it as having 4 of the 5
-  // canonical reports "uploaded" so the Manage Reports counter starts at 4/5
-  // (matching the v1 status quo for the seeded sample).
-  const stored: StoredProperty = {
-    id: burnside.id,
-    property: burnside,
-    reports: {
-      reportsParsedCount: 4,
-      warnings: [],
-      missingReports: ["workOrders"],
-    },
-  };
-  memory = {
-    version: STORAGE_VERSION,
-    properties: [stored],
-    activeId: stored.id,
-    hasBeenSeeded: true,
-  };
-}
-
-// Idempotent. First call on the client reads localStorage and seeds Burnside
-// if and only if `hasBeenSeeded` is missing or false.
-function hydrate(): void {
-  if (hydrated) return;
-  hydrated = true;
-  if (!isBrowser()) return;
-
-  const persisted = safeRead();
-  if (persisted) {
-    memory = persisted;
-    if (
-      memory.activeId &&
-      !memory.properties.some((p) => p.id === memory.activeId)
-    ) {
-      memory.activeId = memory.properties[0]?.id ?? null;
-    }
-    if (!memory.hasBeenSeeded) {
-      // Edge case: a partial / hand-crafted blob without the flag. Treat as
-      // a fresh visit and seed.
-      seedBurnsideIntoMemory();
-      safeWrite(memory);
-    }
-    return;
-  }
-
-  // No persisted blob — true first visit. Seed Burnside, mark seeded.
-  seedBurnsideIntoMemory();
-  safeWrite(memory);
-}
-
-if (typeof window !== "undefined") {
-  // Cross-tab sync. localStorage's `storage` event fires in all OTHER tabs
-  // when one tab writes, so we refresh in-memory state and notify
-  // subscribers. (Same-tab writes don't fire this event — those are
-  // handled by emit() inside each mutator.)
-  window.addEventListener("storage", (e) => {
-    if (e.key !== STORAGE_KEY) return;
-    const fresh = safeRead();
-    if (fresh) {
-      memory = fresh;
-      emit();
-    }
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-export function listProperties(): StoredProperty[] {
-  hydrate();
-  return memory.properties;
-}
-
-export function getProperty(id: string): StoredProperty | undefined {
-  hydrate();
-  return memory.properties.find((p) => p.id === id);
-}
-
-export function getActiveProperty(): StoredProperty | undefined {
-  hydrate();
-  if (!memory.activeId) return undefined;
-  return memory.properties.find((p) => p.id === memory.activeId);
-}
-
-export function setActiveProperty(id: string): void {
-  hydrate();
-  if (!memory.properties.some((p) => p.id === id)) return;
-  memory = { ...memory, activeId: id };
-  safeWrite(memory);
-  emit();
-}
-
-export function getReportsFor(id: string): StoredReports | undefined {
-  return getProperty(id)?.reports;
-}
-
-function makeId(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const suffix = Math.random().toString(36).slice(2, 8);
-  return `${slug || "property"}-${suffix}`;
-}
-
-export function createProperty(input: ManualPropertyInput): StoredProperty {
-  hydrate();
-  const id = makeId(input.name);
-  const property: Property = {
-    id,
-    name: input.name.trim(),
-    ownerName: input.ownerName?.trim() ?? "",
+    id: row.id,
+    name: row.name ?? "",
+    ownerName: row.owner_entity ?? "",
     address: {
-      street: input.address?.trim() ?? "",
-      city: input.city?.trim() ?? "",
-      state: input.state?.trim() ?? "",
+      street: row.address ?? "",
+      city: row.city ?? "",
+      state: row.state ?? "",
       zip: "",
     },
-    // Until a Rent Roll is uploaded we don't know the unit count, so we
-    // default to apartment-building (the multifamily branch). Re-derived on
-    // first upload.
-    propertyType: "apartment-building",
-    reportingPeriod: "",
-    units: [],
-    arBalances: [],
-    workOrders: [],
-    monthlyFinancials: [],
   };
-  const stored: StoredProperty = {
-    id,
-    property,
-    reports: { reportsParsedCount: 0, warnings: [], missingReports: [] },
-  };
-  memory = {
-    ...memory,
-    properties: [...memory.properties, stored],
-    activeId: id,
-    hasBeenSeeded: true,
-  };
-  safeWrite(memory);
-  emit();
-  return stored;
 }
 
-export function deleteProperty(id: string): void {
-  hydrate();
-  const remaining = memory.properties.filter((p) => p.id !== id);
-  // When the active property is deleted, fall back to the first remaining
-  // property in list order. If nothing remains, leave activeId null and let
-  // the switcher render its empty state — we never silently re-seed
-  // Burnside, since `hasBeenSeeded` stays true forever once flipped.
-  let activeId = memory.activeId;
-  if (activeId === id) {
-    activeId = remaining[0]?.id ?? null;
+function reportDbToRow(r: ReportDbRow): ReportRow {
+  return {
+    id: r.id,
+    propertyId: r.property_id,
+    reportType: r.report_type,
+    storagePath: r.storage_path,
+    fileName: r.file_name,
+    parsedData: r.parsed_data,
+    uploadedAt: r.uploaded_at,
+    uploadedBy: r.uploaded_by,
+  };
+}
+
+function buildRecord(propRow: PropertyRow, reportRows: ReportDbRow[]): PropertyRecord {
+  const meta = rowToMeta(propRow);
+  const reports = reportRows.map(reportDbToRow);
+  const payloads: ReportPayload[] = reports.map((r) => ({
+    reportType: r.reportType,
+    data: r.parsedData,
+  } as ReportPayload));
+  const { property, warnings } = composeProperty(meta, payloads);
+  return {
+    id: propRow.id,
+    property,
+    reports,
+    warnings,
+    createdAt: propRow.created_at,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Public reads
+// ---------------------------------------------------------------------------
+
+export async function listProperties(): Promise<PropertyRecord[]> {
+  const sb = supabaseBrowser();
+  const { data: props, error: pErr } = await sb
+    .from("properties")
+    .select("*")
+    .order("created_at", { ascending: true });
+  if (pErr) throw pErr;
+  if (!props || props.length === 0) return [];
+
+  const propRows = props as PropertyRow[];
+  const ids = propRows.map((p) => p.id);
+  const { data: reports, error: rErr } = await sb
+    .from("reports")
+    .select("*")
+    .in("property_id", ids);
+  if (rErr) throw rErr;
+
+  const reportsByProp = new Map<string, ReportDbRow[]>();
+  for (const r of (reports ?? []) as ReportDbRow[]) {
+    const arr = reportsByProp.get(r.property_id) ?? [];
+    arr.push(r);
+    reportsByProp.set(r.property_id, arr);
   }
-  memory = { ...memory, properties: remaining, activeId };
-  safeWrite(memory);
-  emit();
+
+  return propRows.map((p) =>
+    buildRecord(p, reportsByProp.get(p.id) ?? []),
+  );
+}
+
+export async function getProperty(id: string): Promise<PropertyRecord | null> {
+  const sb = supabaseBrowser();
+  const { data: prop, error: pErr } = await sb
+    .from("properties")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (pErr) throw pErr;
+  if (!prop) return null;
+  const { data: reports, error: rErr } = await sb
+    .from("reports")
+    .select("*")
+    .eq("property_id", id);
+  if (rErr) throw rErr;
+  return buildRecord(prop as PropertyRow, (reports ?? []) as ReportDbRow[]);
+}
+
+// Resolve the active property from a URL search-params object. Falls back to
+// the first property in created_at order. Returns null only when the
+// workspace is empty.
+export async function getActiveProperty(
+  propertyIdParam: string | null,
+): Promise<PropertyRecord | null> {
+  const all = await listProperties();
+  if (all.length === 0) return null;
+  if (propertyIdParam) {
+    const match = all.find((p) => p.id === propertyIdParam);
+    if (match) return match;
+  }
+  return all[0] ?? null;
+}
+
+export async function getReportsFor(propertyId: string): Promise<ReportRow[]> {
+  const sb = supabaseBrowser();
+  const { data, error } = await sb
+    .from("reports")
+    .select("*")
+    .eq("property_id", propertyId);
+  if (error) throw error;
+  return ((data ?? []) as ReportDbRow[]).map(reportDbToRow);
+}
+
+// ---------------------------------------------------------------------------
+// Public writes
+// ---------------------------------------------------------------------------
+
+export async function createProperty(
+  input: ManualPropertyInput,
+): Promise<PropertyRecord> {
+  const sb = supabaseBrowser();
+  const { data: { user } } = await sb.auth.getUser();
+  const insertPayload = {
+    name: input.name.trim(),
+    address: input.address?.trim() || null,
+    owner_entity: input.ownerName?.trim() || null,
+    city: input.city?.trim() || null,
+    state: input.state?.trim() || null,
+    created_by: user?.id ?? null,
+  };
+  const { data, error } = await sb
+    .from("properties")
+    .insert(insertPayload)
+    .select()
+    .single();
+  if (error) throw error;
+  return buildRecord(data as PropertyRow, []);
 }
 
 /**
- * Persist parsed reports onto an existing property.
+ * Delete a property and every report attached to it.
  *
- * Manually-entered metadata fields ALWAYS win: `name`, `ownerName`, and
- * every key under `address`. The parser leaves these blank for uploads, so
- * preserving the user's input is the desired default. Reports only
- * contribute the data fields: `units`, `arBalances`, `workOrders`,
- * `monthlyFinancials`, plus the derived `propertyType` and
- * `reportingPeriod` (which the parser computes from the rent roll).
- *
- * If the existing property has empty manual metadata, the parsed values
- * fill in (so a placeholder created with just a name picks up the parsed
- * address, etc., when reports come in).
+ * Order matters: storage objects don't cascade with the row delete, so we
+ * remove every object under `<propertyId>/` first. ON DELETE CASCADE then
+ * handles the `reports` rows when the property row is deleted. If the
+ * storage cleanup races with another tab uploading the same property,
+ * the DB row is still gone — the orphan storage object falls off on the
+ * next upload.
  */
-export function saveReportsFor(
-  id: string,
-  payload: { property: Property; reports: StoredReports },
-): void {
-  hydrate();
-  const idx = memory.properties.findIndex((p) => p.id === id);
-  if (idx < 0) return;
-  const existing = memory.properties[idx]!;
-  const merged: Property = {
-    id: existing.id,
-    name: existing.property.name || payload.property.name,
-    ownerName: existing.property.ownerName || payload.property.ownerName,
-    address: {
-      street: existing.property.address.street || payload.property.address.street,
-      city: existing.property.address.city || payload.property.address.city,
-      state: existing.property.address.state || payload.property.address.state,
-      zip: existing.property.address.zip || payload.property.address.zip,
-    },
-    propertyType: payload.property.propertyType,
-    reportingPeriod: payload.property.reportingPeriod,
-    units: payload.property.units,
-    arBalances: payload.property.arBalances,
-    workOrders: payload.property.workOrders,
-    monthlyFinancials: payload.property.monthlyFinancials,
-  };
-  const next = [...memory.properties];
-  next[idx] = { id: existing.id, property: merged, reports: payload.reports };
-  memory = { ...memory, properties: next };
-  safeWrite(memory);
-  emit();
+export async function deleteProperty(id: string): Promise<void> {
+  const sb = supabaseBrowser();
+  // List + delete every object under the property's prefix. Supabase Storage
+  // doesn't have a "delete all under prefix" primitive; we list and pass
+  // the names to remove().
+  const { data: objects, error: listErr } = await sb.storage
+    .from(REPORTS_BUCKET)
+    .list(id, { limit: 1000 });
+  if (listErr) throw listErr;
+  if (objects && objects.length > 0) {
+    const paths: string[] = [];
+    // The list is shallow — recurse one level into <propertyId>/<reportType>/.
+    for (const top of objects) {
+      const { data: nested } = await sb.storage
+        .from(REPORTS_BUCKET)
+        .list(`${id}/${top.name}`, { limit: 1000 });
+      if (nested) {
+        for (const obj of nested) paths.push(`${id}/${top.name}/${obj.name}`);
+      }
+    }
+    if (paths.length > 0) {
+      const { error: rmErr } = await sb.storage.from(REPORTS_BUCKET).remove(paths);
+      if (rmErr) throw rmErr;
+    }
+  }
+
+  const { error } = await sb.from("properties").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/**
+ * Persist a parsed report. Uploads the raw file to storage, then upserts a
+ * `reports` row keyed on (property_id, report_type). When the upsert
+ * replaces an existing row, the old storage object is deleted first so
+ * we don't leak files.
+ *
+ * Manual metadata on the parent property is never overwritten — the merge
+ * happens on read in composeProperty.
+ */
+export async function saveReport(
+  propertyId: string,
+  reportType: ReportPayload["reportType"],
+  file: File,
+  parsedData: ReportPayload["data"],
+): Promise<ReportRow> {
+  const sb = supabaseBrowser();
+  const { data: { user } } = await sb.auth.getUser();
+
+  // Find any existing row of this type so we can clean up its storage object
+  // after the upsert. Read first because once the upsert replaces the row,
+  // the old storage_path is gone.
+  const { data: existing, error: selErr } = await sb
+    .from("reports")
+    .select("storage_path")
+    .eq("property_id", propertyId)
+    .eq("report_type", reportType)
+    .maybeSingle();
+  if (selErr) throw selErr;
+
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const safeName = file.name.replace(/[^A-Za-z0-9._-]+/g, "_");
+  const storagePath = `${propertyId}/${reportType}/${ts}-${safeName}`;
+
+  const { error: upErr } = await sb.storage
+    .from(REPORTS_BUCKET)
+    .upload(storagePath, file, { contentType: file.type, upsert: false });
+  if (upErr) throw upErr;
+
+  const { data: row, error: insErr } = await sb
+    .from("reports")
+    .upsert(
+      {
+        property_id: propertyId,
+        report_type: reportType,
+        storage_path: storagePath,
+        file_name: file.name,
+        parsed_data: parsedData,
+        uploaded_at: new Date().toISOString(),
+        uploaded_by: user?.id ?? null,
+      },
+      { onConflict: "property_id,report_type" },
+    )
+    .select()
+    .single();
+  if (insErr) throw insErr;
+
+  // Bump the parent's updated_at so the dashboard's "last updated" line
+  // reflects the upload time, not just the property creation time.
+  await sb
+    .from("properties")
+    .update({ updated_at: new Date().toISOString() })
+    .eq("id", propertyId);
+
+  // Delete the old storage object only after the new row is persisted, so a
+  // failure mid-flight doesn't leave the property with no report.
+  if (existing && existing.storage_path && existing.storage_path !== storagePath) {
+    await sb.storage.from(REPORTS_BUCKET).remove([existing.storage_path]);
+  }
+
+  return reportDbToRow(row as ReportDbRow);
 }
 
 // ---------------------------------------------------------------------------
-// Subscriptions / React integration
+// Realtime
+//
+// One subscription channel covers both tables. The callback fires after
+// every INSERT / UPDATE / DELETE on properties or reports so the page can
+// re-fetch the active record without bespoke per-event diffing.
 // ---------------------------------------------------------------------------
 
 export function subscribe(cb: () => void): () => void {
-  subscribers.add(cb);
+  const sb = supabaseBrowser();
+  const ch = sb
+    .channel("properties-and-reports")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "properties" },
+      () => cb(),
+    )
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "reports" },
+      () => cb(),
+    )
+    .subscribe();
   return () => {
-    subscribers.delete(cb);
+    sb.removeChannel(ch);
   };
 }
-
-// useSyncExternalStore wants a stable reference between calls when the data
-// hasn't changed. `memory` is reassigned on every mutation, so callers can
-// safely depend on === identity to detect changes.
-export function getSnapshot(): Store {
-  hydrate();
-  return memory;
-}
-
-const SSR_SNAPSHOT: Store = emptyStore();
-export function getServerSnapshot(): Store {
-  return SSR_SNAPSHOT;
-}
-
-// ---------------------------------------------------------------------------
-// Test helpers — not part of the public surface.
-// ---------------------------------------------------------------------------
-
-/** @internal */
-export function _resetForTests(): void {
-  memory = emptyStore();
-  hydrated = false;
-  subscribers.clear();
-  if (isBrowser()) {
-    try {
-      window.localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // ignore
-    }
-  }
-}
-
-/** @internal */
-export const _STORAGE_KEY = STORAGE_KEY;
